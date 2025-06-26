@@ -20,44 +20,62 @@ class CustomPDF(FPDF):
 def get_company_number(name):
     url = f"{BASE_CH_URL}/search/companies"
     params = {"q": name}
-    r = requests.get(url, params=params, auth=(COMPANIES_HOUSE_API_KEY, ''))
-    items = r.json().get("items", [])
-    if not items:
+    try:
+        r = requests.get(url, params=params, auth=(COMPANIES_HOUSE_API_KEY, ''))
+        r.raise_for_status()
+        data = r.json()
+        items = data.get("items", [])
+        if not items:
+            return None
+        return items[0]["company_number"], items[0]["title"]
+    except Exception as e:
+        print(f"Error fetching company number: {e}")
         return None
-    return items[0]["company_number"], items[0]["title"]
 
 def get_insolvency_info(company_number):
     url = f"{BASE_CH_URL}/company/{company_number}/insolvency"
-    r = requests.get(url, auth=(COMPANIES_HOUSE_API_KEY, ''))
-    return r.json() if r.status_code == 200 else {}
+    try:
+        r = requests.get(url, auth=(COMPANIES_HOUSE_API_KEY, ''))
+        return r.json() if r.status_code == 200 else {}
+    except Exception as e:
+        print(f"Error fetching insolvency info: {e}")
+        return {}
 
 def get_filing_history(company_number):
     url = f"{BASE_CH_URL}/company/{company_number}/filing-history"
-    r = requests.get(url, auth=(COMPANIES_HOUSE_API_KEY, ''), params={"items_per_page": 100})
-    if r.status_code != 200:
+    try:
+        r = requests.get(url, auth=(COMPANIES_HOUSE_API_KEY, ''), params={"items_per_page": 100})
+        if r.status_code != 200:
+            return []
+        filings = r.json().get("items", [])
+        keywords = [
+            "winding up",
+            "notice of intention to appoint administrator",
+            "administration order",
+            "appointment of administrator",
+            "application for administration"
+        ]
+        return [f for f in filings if any(kw.lower() in f.get("description", "").lower() for kw in keywords)]
+    except Exception as e:
+        print(f"Error fetching filing history: {e}")
         return []
-    filings = r.json().get("items", [])
-    keywords = [
-        "winding up",
-        "notice of intention to appoint administrator",
-        "administration order",
-        "appointment of administrator",
-        "application for administration"
-    ]
-    return [f for f in filings if any(kw.lower() in f.get("description", "").lower() for kw in keywords)]
 
 def search_london_gazette(company_name):
     query = company_name.replace(' ', '+')
     url = f"https://www.thegazette.co.uk/all-notices/notice?text={query}"
-    r = requests.get(url)
-    soup = BeautifulSoup(r.text, 'html.parser')
-    notices = []
-    for article in soup.select("article.notice")[:5]:
-        title = article.find("h3").get_text(strip=True)
-        date = article.find("time").get_text(strip=True)
-        link = "https://www.thegazette.co.uk" + article.find("a")["href"]
-        notices.append({"title": title, "date": date, "link": link})
-    return notices
+    try:
+        r = requests.get(url)
+        soup = BeautifulSoup(r.text, 'html.parser')
+        notices = []
+        for article in soup.select("article.notice")[:5]:
+            title = article.find("h3").get_text(strip=True)
+            date = article.find("time").get_text(strip=True)
+            link = "https://www.thegazette.co.uk" + article.find("a")["href"]
+            notices.append({"title": title, "date": date, "link": link})
+        return notices
+    except Exception as e:
+        print(f"Error scraping London Gazette: {e}")
+        return []
 
 def format_insolvency_case_summary(case):
     summary = "\n**Insolvency Case**\n"
@@ -92,7 +110,6 @@ def generate_pdf_report(company_name, insolvency_info, filings, gazette, filenam
     pdf.set_auto_page_break(auto=True, margin=15)
     pdf.set_font("Arial", size=8)
 
-# Title Page
     pdf.add_page()
     pdf.set_y(60)
     pdf.set_font("Arial", 'B', 10)
@@ -118,7 +135,6 @@ def generate_pdf_report(company_name, insolvency_info, filings, gazette, filenam
     draw_status_box("Relevant Filings Found", len(filings) > 0, pdf.get_y())
     draw_status_box("London Gazette Notices Found", len(gazette) > 0, pdf.get_y())
 
-    # Explanation Page
     pdf.add_page()
     pdf.set_y(80)
     pdf.set_font("Arial", 'B', 12)
@@ -159,7 +175,6 @@ def generate_pdf_report(company_name, insolvency_info, filings, gazette, filenam
     if not insolvency_info.get("cases") and not filings and not gazette:
         pdf.cell(0, 10, sanitize_text("No records found."), ln=True, align='C')
 
-    # Sources Page
     pdf.add_page()
     pdf.set_y(80)
     pdf.set_font("Arial", 'B', 12)
